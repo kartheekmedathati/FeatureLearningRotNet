@@ -15,6 +15,7 @@ import errno
 import numpy as np
 import sys
 import csv
+import cv2
 
 from pdb import set_trace as breakpoint
 
