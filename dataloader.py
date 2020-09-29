@@ -21,8 +21,11 @@ from pdb import set_trace as breakpoint
 
 # Set the paths of the datasets here.
 _CIFAR_DATASET_DIR = './datasets/CIFAR'
-_IMAGENET_DATASET_DIR = './datasets/IMAGENET/ILSVRC2012'
+#_IMAGENET_DATASET_DIR = './datasets/IMAGENET/ILSVRC2012'
 _PLACES205_DATASET_DIR = './datasets/Places205'
+#_IMAGENET_DATASET_DIR = '../imagenet/ILSVRC/Data/CLS-LOC'
+#_IMAGENET_DATASET_DIR = '/home/rggadde/efs/rggadde/data/imagenet/ILSVRC/Data/CLS-LOC'
+_IMAGENET_DATASET_DIR = '/home/medathati/Work/SpectralSelfSupervision/Data/ILSVRC/Data/CLS-LOC'
 
 
 def buildLabelIndex(labels):
@@ -85,7 +88,7 @@ class GenericDataset(data.Dataset):
         # of training examples per category that would be used.
         # This input argument was introduced in order to be able
         # to use less annotated examples than what are available
-        # in a semi-superivsed experiment. By default all the 
+        # in a semi-superivsed experiment. By default all the
         # available training examplers per category are being used.
         self.num_imgs_per_cat = num_imgs_per_cat
 
@@ -159,14 +162,14 @@ class GenericDataset(data.Dataset):
                 download=True, transform=self.transform)
         else:
             raise ValueError('Not recognized dataset {0}'.format(dname))
-        
+
         if num_imgs_per_cat is not None:
             self._keep_first_k_examples_per_category(num_imgs_per_cat)
-        
-    
+
+
     def _keep_first_k_examples_per_category(self, num_imgs_per_cat):
         print('num_imgs_per_category {0}'.format(num_imgs_per_cat))
-   
+
         if self.dataset_name=='cifar10':
             labels = self.data.test_labels if (self.split=='test') else self.data.train_labels
             data = self.data.test_data if (self.split=='test') else self.data.train_data
@@ -181,12 +184,12 @@ class GenericDataset(data.Dataset):
             if self.split=='test':
                 self.data.test_labels = labels
                 self.data.test_data = data
-            else: 
+            else:
                 self.data.train_labels = labels
                 self.data.train_data = data
 
             label2ind = buildLabelIndex(labels)
-            for k, v in label2ind.items(): 
+            for k, v in label2ind.items():
                 assert(len(v)==num_imgs_per_cat)
 
         elif self.dataset_name=='imagenet':
@@ -214,6 +217,101 @@ class Denormalize(object):
             t.mul_(s).add_(m)
         return tensor
 
+def split_bands(img, num_bands=4):
+    assert(num_bands > 1)
+    rows, cols, channels = img.shape
+    crow, ccol = rows/2 , cols/2 # center
+    #Divide into uniform bands.
+    rspace = crow - np.linspace(0,crow,num_bands)
+    cspace = ccol - np.linspace(0,ccol,num_bands)
+    imgs = [np.float32(img)]
+    for i in range(1, num_bands):
+        # create a mask first, center square is 1, remaining all zeros
+        mask1 = np.zeros((rows, cols, 2), np.float32)
+        mask2 = np.zeros((rows, cols, 2), np.float32)
+        mask1[int(crow-rspace[i-1]):int(crow+rspace[i-1]), int(ccol-cspace[i-1]):int(ccol+cspace[i-1]),:] = 1
+        mask2[int(crow-rspace[i  ]):int(crow+rspace[i  ]), int(ccol-cspace[i  ]):int(ccol+cspace[i  ]),:] = 1
+        filtered_img = np.zeros(img.shape)
+        
+        for c in range(channels):
+            f = cv2.dft(np.float32(img[:,:,c]), flags=cv2.DFT_COMPLEX_OUTPUT)
+            #f = np.fft.fft2(np.float32(img[:,:,c]))
+            f_shift = np.fft.fftshift(f)
+        
+            ##Original image reconstruction
+            #f_ishift = np.fft.ifftshift(f_shift)
+            #filtered_img[:,:,c] = cv2.idft(f_ishift, flags=cv2.DFT_SCALE | cv2.DFT_REAL_OUTPUT)
+            ##filtered_img[:,:,c] = cv2.magnitude(img_back[:,:,0],img_back[:,:,1])
+            #f_ishift = np.fft.ifftshift(f_shift * (mask2[:,:,0] - mask1[:,:,1]))
+            #temp = np.fft.ifft2(f_ishift)
+            f_ishift = np.fft.ifftshift(f_shift * (mask2 - mask1))
+            #filtered_img[:,:,c] = cv2.idft(f_ishift, flags=cv2.DFT_SCALE | cv2.DFT_REAL_OUTPUT)
+            img_back = cv2.idft(f_ishift)
+            filtered_img[:,:,c] = cv2.magnitude(img_back[:,:,0],img_back[:,:,1])
+        imgs.append(np.float32(filtered_img))
+    return imgs
+
+def roll_n(X, axis, n):
+    f_idx = tuple(slice(None, None, None) if i != axis \
+            else slice(0, n, None) for i in range(X.dim()))
+    b_idx = tuple(slice(None, None, None) if i != axis \
+            else slice(n, None, None) for i in range(X.dim()))
+    front = X[f_idx]
+    back = X[b_idx]
+    return torch.cat([back, front], axis)
+
+def batch_fftshift2d(x):
+    real, imag = torch.unbind(x, -1)
+    for dim in range(1, len(real.size())):
+        n_shift = real.size(dim)//2
+        if real.size(dim) % 2 != 0:
+            n_shift += 1
+        real = roll_n(real, axis=dim, n=n_shift)
+        imag = roll_n(imag, axis=dim, n=n_shift)
+    return torch.stack((real, imag), -1)
+
+def batch_ifftshift2d(x):
+    real, imag = torch.unbind(x, -1)
+    for dim in range(len(real.size()) - 1, 0, -1):
+        real = roll_n(real, axis=dim, n=real.size(dim)//2)
+        imag = roll_n(imag, axis=dim, n=imag.size(dim)//2)
+    return torch.stack((real, imag), -1)  # last dim=2 (real&imag)
+
+@torch.no_grad():
+def root_filter(img,num_filters=10):
+    assert(num_filters>1)
+    imgs = [img]
+
+
+@torch.no_grad()
+def split_bands_torch(img, num_bands=4):
+    assert(num_bands > 1)
+    imgs = [img]
+    I = torch.from_numpy(img.transpose([2,0,1])).float().to('cpu')
+    I.unsqueeze_(0)
+    I_fft = torch.rfft(I, signal_ndim=2, onesided=False, normalized=False)
+    I_shift = batch_fftshift2d(I_fft)
+
+    _, _, rows, cols, _ = I_shift.shape
+    crow, ccol = rows/2 , cols/2     # center
+    rspace = crow - np.linspace(0, crow, num_bands)
+    cspace = ccol - np.linspace(0, ccol, num_bands)
+
+    for i in range(1, num_bands):
+        mask1 = torch.zeros(I_shift.shape) #(rows, cols, 2), np.uint8)
+        mask2 = torch.zeros(I_shift.shape) #(rows, cols, 2), np.uint8)
+        mask1[:, :, int(crow-rspace[i-1]):int(crow+rspace[i-1]),
+              int(ccol-cspace[i-1]):int(ccol+cspace[i-1]), :] = 1
+        mask2[:, :, int(crow-rspace[i  ]):int(crow+rspace[i  ]),
+              int(ccol-cspace[i  ]):int(ccol+cspace[i  ]), :] = 1
+
+        I_ishift = batch_ifftshift2d(I_shift * (mask2 - mask1))
+        I_ifft = torch.ifft(I_ishift, signal_ndim=2, normalized=False)
+        I_back = torch.sqrt(I_ifft[:,:,:,:,0]**2 + I_ifft[:,:,:,:,1]**2)
+        I_back = I_back.cpu().numpy()[0].transpose([1,2,0])
+        imgs.append(I_back)
+    return imgs
+
 def rotate_img(img, rot):
     if rot == 0: # 0 degrees rotation
         return img
@@ -225,7 +323,6 @@ def rotate_img(img, rot):
         return np.transpose(np.flipud(img), (1,0,2))
     else:
         raise ValueError('rotation should be 0, 90, 180, or 270 degrees')
-
 
 class DataLoader(object):
     def __init__(self,
@@ -265,14 +362,20 @@ class DataLoader(object):
             def _load_function(idx):
                 idx = idx % len(self.dataset)
                 img0, _ = self.dataset[idx]
-                rotated_imgs = [
-                    self.transform(img0),
-                    self.transform(rotate_img(img0,  90)),
-                    self.transform(rotate_img(img0, 180)),
-                    self.transform(rotate_img(img0, 270))
-                ]
-                rotation_labels = torch.LongTensor([0, 1, 2, 3])
-                return torch.stack(rotated_imgs, dim=0), rotation_labels
+                num_bands = 4
+                #filtered_imgs = split_bands(img0, num_bands=num_bands)
+                filtered_imgs = split_bands_torch(img0, num_bands=num_bands)
+                filtered_imgs =[self.transform(img) for img in filtered_imgs]
+                filtered_labels = torch.arange(0, num_bands) # torch.LongTensor([0, 1, 2, 3])
+                return torch.stack(filtered_imgs, dim=0), filtered_labels
+                #rotated_imgs = [
+                #    self.transform(img0),
+                #    self.transform(rotate_img(img0,  90).copy()),
+                #    self.transform(rotate_img(img0, 180).copy()),
+                #    self.transform(rotate_img(img0, 270).copy())
+                #]
+                #rotation_labels = torch.LongTensor([0, 1, 2, 3])
+                #return torch.stack(rotated_imgs, dim=0), rotation_labels
             def _collate_fun(batch):
                 batch = default_collate(batch)
                 assert(len(batch)==2)
@@ -306,13 +409,14 @@ class DataLoader(object):
 if __name__ == '__main__':
     from matplotlib import pyplot as plt
 
+    #dataset = GenericDataset('cifar10','train', random_sized_crop=False)
     dataset = GenericDataset('imagenet','train', random_sized_crop=True)
     dataloader = DataLoader(dataset, batch_size=8, unsupervised=True)
 
     for b in dataloader(0):
         data, label = b
         break
-
+    print(data.size())
     inv_transform = dataloader.inv_transform
     for i in range(data.size(0)):
         plt.subplot(data.size(0)/4,4,i+1)

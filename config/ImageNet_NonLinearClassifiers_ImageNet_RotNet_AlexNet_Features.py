@@ -25,7 +25,7 @@ config['max_num_epochs'] = 40
 
 networks = {}
 
-pretrained = './experiments/ImageNet_RotNet_AlexNet/model_net_epoch50'
+pretrained = './experiments/ImageNet_RotNet_AlexNet/model_net_epoch12'
 networks['feat_extractor'] = {'def_file': 'architectures/AlexNet.py', 'pretrained': pretrained, 'opt': {'num_classes': 4},  'optim_params': None} 
 
 net_opt_cls = [None] * 2
