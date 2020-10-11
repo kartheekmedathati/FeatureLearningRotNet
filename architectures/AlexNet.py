@@ -20,7 +20,7 @@ class AlexNet(nn.Module):
         num_classes = opt['num_classes']
 
         conv1 = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.Conv2d(3, 64, kernel_size=14, stride=1, padding=2), # stride = 4
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
         )
@@ -47,6 +47,7 @@ class AlexNet(nn.Module):
             nn.ReLU(inplace=True),
         )
         pool5 = nn.MaxPool2d(kernel_size=3, stride=2)
+        #pool5 = nn.MaxPool2d(kernel_size=1, stride=1)
 
         num_pool5_feats = 6 * 6 * 256
         fc_block = nn.Sequential(
@@ -132,6 +133,8 @@ class AlexNet(nn.Module):
         for f in range(max_out_feat+1):
             feat = self._feature_blocks[f](feat)
             key = self.all_feat_names[f]
+            #print('key:',key)
+            #print('feat:',feat.size())
             if key in out_feat_keys:
                 out_feats[out_feat_keys.index(key)] = feat
 

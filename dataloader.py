@@ -19,13 +19,16 @@ import cv2
 
 from pdb import set_trace as breakpoint
 
+# good solution !!!!
+
 # Set the paths of the datasets here.
 _CIFAR_DATASET_DIR = './datasets/CIFAR'
 #_IMAGENET_DATASET_DIR = './datasets/IMAGENET/ILSVRC2012'
 _PLACES205_DATASET_DIR = './datasets/Places205'
 #_IMAGENET_DATASET_DIR = '../imagenet/ILSVRC/Data/CLS-LOC'
 #_IMAGENET_DATASET_DIR = '/home/rggadde/efs/rggadde/data/imagenet/ILSVRC/Data/CLS-LOC'
-_IMAGENET_DATASET_DIR = '/home/medathati/Work/SpectralSelfSupervision/Data/ILSVRC/Data/CLS-LOC'
+#_IMAGENET_DATASET_DIR = '/home/medathati/Work/SpectralSelfSupervision/Data/ILSVRC/Data/CLS-LOC'
+_IMAGENET_DATASET_DIR = '/home/medathati/Work/SpectralSelfSupervision/Data/tiny-imagenet-200' # This is tiny Imagenet
 
 
 def buildLabelIndex(labels):
@@ -99,21 +102,21 @@ class GenericDataset(data.Dataset):
 
             if self.split!='train':
                 transforms_list = [
-                    transforms.Scale(256),
-                    transforms.CenterCrop(224),
+                    transforms.Scale(64),
+                    transforms.CenterCrop(64), # 224
                     lambda x: np.asarray(x),
                 ]
             else:
                 if self.random_sized_crop:
                     transforms_list = [
-                        transforms.RandomSizedCrop(224),
+                        transforms.RandomSizedCrop(64), #224
                         transforms.RandomHorizontalFlip(),
                         lambda x: np.asarray(x),
                     ]
                 else:
                     transforms_list = [
-                        transforms.Scale(256),
-                        transforms.RandomCrop(224),
+                        transforms.Scale(64),#256
+                        transforms.RandomCrop(64),
                         transforms.RandomHorizontalFlip(),
                         lambda x: np.asarray(x),
                     ]
@@ -277,17 +280,47 @@ def batch_ifftshift2d(x):
         imag = roll_n(imag, axis=dim, n=imag.size(dim)//2)
     return torch.stack((real, imag), -1)  # last dim=2 (real&imag)
 
-@torch.no_grad():
-def root_filter(img,num_filters=10):
-    assert(num_filters>1)
-    imgs = [img]
+@torch.no_grad()
+def MinMaxNormalize(X):
+    X_channel_flat = X.view(*(X.size()[:-2]),1,-1)
+    X_channel_min,_ = torch.min(X_channel_flat,len(X.size())-1, keepdim=True, out=None)
+    X_channel_max,_ = torch.max(X_channel_flat,len(X.size())-1, keepdim=True, out=None)
+    X_channel_den = X_channel_max - X_channel_min
+    X_channel_den[X_channel_den==0] = 1.0 # To avoid division by zero
+    X_normalized_flat = (X_channel_flat - X_channel_min)/X_channel_den
+    X_normalized = X_normalized_flat.view(X.size())
+    return X_normalized
 
+
+@torch.no_grad()
+def root_filter(img,num_filters=2):
+    assert(num_filters>1)
+    cuda = torch.device('cuda')
+    img_cu = torch.from_numpy(img.transpose([2,0,1])).float().to('cpu')
+    img_cu  = MinMaxNormalize(img_cu)
+    imgs = [img]
+    img_cu.unsqueeze_(0)
+    I_fft = torch.rfft(img_cu, signal_ndim=2, onesided = False, normalized=False)
+    I_mag = ((I_fft[:,:,:,:,0]**2+I_fft[:,:,:,:,1]**2)**0.5)
+    #I_mag_nth = I_mag**(1-0.1)
+    pf = 1.0/num_filters
+    I_mag_nth = I_mag**(pf)
+    for i in range(num_filters):
+        I_fft[:,:,:,:,0] = I_fft[:,:,:,:,0]/I_mag_nth
+        I_fft[:,:,:,:,1] = I_fft[:,:,:,:,1]/I_mag_nth
+        I_fft[I_fft!=I_fft]=0
+        I_hat = torch.irfft(I_fft, signal_ndim=2, onesided = False, normalized=False)
+        I_hat_normalized = MinMaxNormalize(I_hat)
+        I_hat_normalized = I_hat_normalized.cpu().numpy()[0].transpose([1,2,0])
+        imgs.append(I_hat_normalized)
+    return imgs
 
 @torch.no_grad()
 def split_bands_torch(img, num_bands=4):
     assert(num_bands > 1)
     imgs = [img]
     I = torch.from_numpy(img.transpose([2,0,1])).float().to('cpu')
+    #I = transforms.ToTensor()(np.array(img.transpose([2,0,1])))
     I.unsqueeze_(0)
     I_fft = torch.rfft(I, signal_ndim=2, onesided=False, normalized=False)
     I_shift = batch_fftshift2d(I_fft)
@@ -311,6 +344,62 @@ def split_bands_torch(img, num_bands=4):
         I_back = I_back.cpu().numpy()[0].transpose([1,2,0])
         imgs.append(I_back)
     return imgs
+
+# Source: https://stackoverflow.com/questions/7274221/changing-image-hue-with-python-pil
+def rgb_to_hsv(rgb):
+    # Translated from source of colorsys.rgb_to_hsv
+    # r,g,b should be a numpy arrays with values between 0 and 255
+    # rgb_to_hsv returns an array of floats between 0.0 and 1.0.
+    rgb = rgb.astype('float')
+    hsv = np.zeros_like(rgb)
+    # in case an RGBA array was passed, just copy the A channel
+    hsv[..., 3:] = rgb[..., 3:]
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    maxc = np.max(rgb[..., :3], axis=-1)
+    minc = np.min(rgb[..., :3], axis=-1)
+    hsv[..., 2] = maxc
+    mask = maxc != minc
+    hsv[mask, 1] = (maxc - minc)[mask] / maxc[mask]
+    rc = np.zeros_like(r)
+    gc = np.zeros_like(g)
+    bc = np.zeros_like(b)
+    rc[mask] = (maxc - r)[mask] / (maxc - minc)[mask]
+    gc[mask] = (maxc - g)[mask] / (maxc - minc)[mask]
+    bc[mask] = (maxc - b)[mask] / (maxc - minc)[mask]
+    hsv[..., 0] = np.select(
+        [r == maxc, g == maxc], [bc - gc, 2.0 + rc - bc], default=4.0 + gc - rc)
+    hsv[..., 0] = (hsv[..., 0] / 6.0) % 1.0
+    return hsv
+
+def hsv_to_rgb(hsv):
+    # Translated from source of colorsys.hsv_to_rgb
+    # h,s should be a numpy arrays with values between 0.0 and 1.0
+    # v should be a numpy array with values between 0.0 and 255.0
+    # hsv_to_rgb returns an array of uints between 0 and 255.
+    rgb = np.empty_like(hsv)
+    rgb[..., 3:] = hsv[..., 3:]
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    i = (h * 6.0).astype('uint8')
+    f = (h * 6.0) - i
+    p = v * (1.0 - s)
+    q = v * (1.0 - s * f)
+    t = v * (1.0 - s * (1.0 - f))
+    i = i % 6
+    conditions = [s == 0.0, i == 1, i == 2, i == 3, i == 4, i == 5]
+    rgb[..., 0] = np.select(conditions, [v, q, p, p, t, v], default=v)
+    rgb[..., 1] = np.select(conditions, [v, v, v, q, p, p], default=t)
+    rgb[..., 2] = np.select(conditions, [v, p, t, v, v, q], default=p)
+    return rgb.astype('uint8')
+
+
+def shift_hue(arr,hshift):
+    #print("Rotating hue by ",hshift*360)
+    hsv=rgb_to_hsv(arr)
+    #hsv[...,0]=hshift #To set the hue
+    hsv[...,0]= (hsv[...,0] + hshift)%1.0
+    rgb=hsv_to_rgb(hsv)
+    return rgb
+
 
 def rotate_img(img, rot):
     if rot == 0: # 0 degrees rotation
@@ -362,20 +451,76 @@ class DataLoader(object):
             def _load_function(idx):
                 idx = idx % len(self.dataset)
                 img0, _ = self.dataset[idx]
-                num_bands = 4
-                #filtered_imgs = split_bands(img0, num_bands=num_bands)
-                filtered_imgs = split_bands_torch(img0, num_bands=num_bands)
-                filtered_imgs =[self.transform(img) for img in filtered_imgs]
-                filtered_labels = torch.arange(0, num_bands) # torch.LongTensor([0, 1, 2, 3])
-                return torch.stack(filtered_imgs, dim=0), filtered_labels
-                #rotated_imgs = [
-                #    self.transform(img0),
-                #    self.transform(rotate_img(img0,  90).copy()),
-                #    self.transform(rotate_img(img0, 180).copy()),
-                #    self.transform(rotate_img(img0, 270).copy())
-                #]
-                #rotation_labels = torch.LongTensor([0, 1, 2, 3])
-                #return torch.stack(rotated_imgs, dim=0), rotation_labels
+                num_bands =  4
+
+                # #filtered_imgs = split_bands(img0, num_bands=num_bands)
+                # #print("This function is calling the split_bands_torch during training")
+                # filtered_imgs = split_bands_torch(img0, num_bands=num_bands)
+                # #filtered_imgs =  filtered_imgs.cpu().numpy()
+                # filtered_imgs =[self.transform(img) for img in filtered_imgs]
+                # filtered_labels = torch.arange(0, num_bands) # torch.LongTensor([0, 1, 2, 3])
+                # return torch.stack(filtered_imgs, dim=0), filtered_labels
+
+                #num_bands =  3
+                #filtered_imgs = root_filter(img0, num_filters=num_bands)
+                #filtered_labels = torch.arange(0, num_bands+1) 
+                #filtered_imgs =  filtered_imgs.cpu().numpy()
+                #filtered_imgs =[self.transform(img) for img in filtered_imgs]
+                #return torch.stack(filtered_imgs, dim=0), filtered_labels
+                
+                # rotated_imgs = [
+                #     self.transform(img0),
+                #     self.transform(rotate_img(img0,  90).copy()),
+                #     self.transform(rotate_img(img0, 180).copy()),
+                #     self.transform(rotate_img(img0, 270).copy())
+                # ]
+                # rotation_labels = torch.LongTensor([0, 1, 2, 3])
+                # return torch.stack(rotated_imgs, dim=0), rotation_labels
+
+                #Hue Rotated Images
+                # rotated_imgs = [
+                #     self.transform(img0),
+                #     self.transform(shift_hue(img0,  90/360.0).copy()),
+                #     self.transform(shift_hue(img0, 180/360.0).copy()),
+                #     self.transform(shift_hue(img0, 270/360.0).copy())
+                # ]
+                # rotation_labels = torch.LongTensor([0, 1, 2, 3])
+
+                #Geometric and Photometric Rotated Images
+                rotated_imgs = [
+                    self.transform(img0),
+                    self.transform(rotate_img(img0,  90).copy()),
+                    self.transform(rotate_img(img0, 180).copy()),
+                    self.transform(rotate_img(img0, 270).copy()),
+                    self.transform(shift_hue(img0,  90/360.0).copy()),
+                    self.transform(shift_hue(img0, 180/360.0).copy()),
+                    self.transform(shift_hue(img0, 270/360.0).copy()),
+                    self.transform(rotate_img(shift_hue(img0,  90/360.0),  90).copy()),
+                    self.transform(rotate_img(shift_hue(img0, 180/360.0),  90).copy()),
+                    self.transform(rotate_img(shift_hue(img0, 270/360.0),  90).copy()),
+                    self.transform(rotate_img(shift_hue(img0,  90/360.0), 180).copy()),
+                    self.transform(rotate_img(shift_hue(img0, 180/360.0), 180).copy()),
+                    self.transform(rotate_img(shift_hue(img0, 270/360.0), 180).copy()),
+                    self.transform(rotate_img(shift_hue(img0,  90/360.0), 270).copy()),
+                    self.transform(rotate_img(shift_hue(img0, 180/360.0), 270).copy()),
+                    self.transform(rotate_img(shift_hue(img0, 270/360.0), 270).copy())
+                ]
+                rotation_labels = torch.LongTensor([0, 1, 2, 3,4,5,6,7,8,9,10,11,12,13,14,15])
+
+                # rotated_imgs = [
+                #     self.transform(img0),
+                #     self.transform(shift_hue(img0,  45/360.0).copy()),
+                #     self.transform(shift_hue(img0, 90/360.0).copy()),
+                #     self.transform(shift_hue(img0, 135/360.0).copy()),
+                #     self.transform(shift_hue(img0, 180/360.0).copy()),
+                #     self.transform(shift_hue(img0, 225/360.0).copy()),
+                #     self.transform(shift_hue(img0, 270/360.0).copy()),
+                #     self.transform(shift_hue(img0, 315/360.0).copy())
+                # ]
+                # rotation_labels = torch.LongTensor([0, 1, 2, 3,4,5,6,7])
+
+                return torch.stack(rotated_imgs, dim=0), rotation_labels
+
             def _collate_fun(batch):
                 batch = default_collate(batch)
                 assert(len(batch)==2)

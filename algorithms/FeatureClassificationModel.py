@@ -83,12 +83,12 @@ class FeatureClassificationModel(Algorithm):
             for i in range(len(pred_var)):
                 loss_this = self.criterions['loss'](pred_var[i], labels_var)
                 loss_total = loss_this if (loss_total is None) else (loss_total + loss_this)
-                record['prec1_c'+str(1+i)] = accuracy(pred_var[i].data, labels, topk=(1,))[0]#[0]
-                record['prec5_c'+str(1+i)] = accuracy(pred_var[i].data, labels, topk=(5,))[0]#[0]
+                record['prec1_c'+str(1+i)] = accuracy(pred_var[i].data, labels, topk=(1,))[0].item() #[0]
+                record['prec5_c'+str(1+i)] = accuracy(pred_var[i].data, labels, topk=(5,))[0].item() #[0]
         else:
             loss_total = self.criterions['loss'](pred_var, labels_var)
-            record['prec1'] = accuracy(pred_var.data, labels, topk=(1,))[0][0]
-            record['prec5'] = accuracy(pred_var.data, labels, topk=(5,))[0][0]
+            record['prec1'] = accuracy(pred_var.data, labels, topk=(1,))[0].item() #[0]
+            record['prec5'] = accuracy(pred_var.data, labels, topk=(5,))[0].item() #[0]
         record['loss'] = loss_total.data#[0]
         #********************************************************
 
