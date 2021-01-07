@@ -62,8 +62,6 @@ class ClassificationModel(Algorithm):
         labels = self.tensors['labels']
         labels1 = self.tensors['labels1']
         batch_load_time = time.time() - start
-        #print("Labels:", labels)
-        #print("HLabels:", labels1)
         #********************************************************
 
         #********************************************************
@@ -81,22 +79,13 @@ class ClassificationModel(Algorithm):
 
         #************ FORWARD THROUGH NET ***********************
         fc_feat, pred_var, pred_var1 = self.networks['model'](dataX_var)
-        #pred_var = self.networks['model'](dataX_var)
-        #print("Shape of predictions:",pred_var.size())
+        #print("Shape of predictions:",fc_feat.size(),pred_var.size(),pred_var1.size())
         #********************************************************
-        
+
         #*************** COMPUTE LOSSES *************************
+        
         record = {}
-        loss_mse = self.criterions['mseloss'](fc_feat[0::16,:],fc_feat[np.random.randint(0,16)::16,:])
-        #loss_mse = self.criterions['mseloss'](fc_feat[0::16,:],fc_feat[np.random.randint(0,16)::16,:])
-        loss_cross_entropy1 = self.criterions['loss'](pred_var, labels_var) 
-        loss_cross_entropy2 = self.criterions['loss'](pred_var1,labels_var1)
-        print("Loss cross entroy 1:", loss_cross_entropy1.data, "cross entropy2:",loss_cross_entropy2.data, "MSE:", loss_mse.data)
-        loss_total = loss_cross_entropy1 + loss_cross_entropy2 + loss_mse
-        #loss_total = 0.05*loss_cross_entropy1 + 0.05*loss_cross_entropy2 + 0.9*loss_mse
-        #loss_total = self.criterions['loss'](pred_var, labels_var) + self.criterions['loss'](pred_var1,labels_var1) +self.criterions['mseloss'](fc_feat[0::16,:],fc_feat[np.random.randint(0,16)::16,:])
-        #loss_total = self.criterions['loss'](pred_var, labels_var) 
-        #print("Prediction shape:", pred_var.size())
+        loss_total = self.criterions['loss'](pred_var, labels_var) + self.criterions['loss'](pred_var1,labels_var1) + self.criterions['mseloss'](fc_feat[0::16,:],fc_feat[np.random.randint(0,16)::16,:])
         record['prec1'] = accuracy(pred_var.data, labels, topk=(1,))[0]#[0]
         record['loss'] = loss_total.data#[0]
         #********************************************************
@@ -110,4 +99,5 @@ class ClassificationModel(Algorithm):
         total_time = batch_process_time + batch_load_time
         record['load_time'] = 100*(batch_load_time/total_time)
         record['process_time'] = 100*(batch_process_time/total_time)
+
         return record

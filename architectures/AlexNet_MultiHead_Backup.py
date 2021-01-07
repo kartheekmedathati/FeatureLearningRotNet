@@ -9,13 +9,16 @@ from pdb import set_trace as breakpoint
 class Flatten(nn.Module):
     def __init__(self):
         super(Flatten, self).__init__()
+
     def forward(self, feat):
         return feat.view(feat.size(0), -1)
+
 
 class AlexNet(nn.Module):
     def __init__(self, opt):
         super(AlexNet, self).__init__()
         num_classes = opt['num_classes']
+
         conv1 = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2), # stride = 1, kernel_size = 14 for 64x64
             nn.BatchNorm2d(64),
@@ -45,6 +48,7 @@ class AlexNet(nn.Module):
         )
         pool5 = nn.MaxPool2d(kernel_size=3, stride=2)
         #pool5 = nn.MaxPool2d(kernel_size=1, stride=1)
+
         num_pool5_feats = 6 * 6 * 256
         fc_block = nn.Sequential(
             Flatten(),
@@ -90,6 +94,7 @@ class AlexNet(nn.Module):
         assert(len(self.all_feat_names) == len(self._feature_blocks))
 
     def _parse_out_keys_arg(self, out_feat_keys):
+
         # By default return the features of the last layer / module.
         out_feat_keys = [self.all_feat_names[-3:],
                          ] if out_feat_keys is None else out_feat_keys
@@ -105,18 +110,22 @@ class AlexNet(nn.Module):
             elif key in out_feat_keys[:f]:
                 raise ValueError(
                     'Duplicate output feature key: {0}.'.format(key))
+
         # Find the highest output feature in `out_feat_keys
         max_out_feat = max([self.all_feat_names.index(key)
                             for key in out_feat_keys])
+
         return out_feat_keys, max_out_feat
 
     def forward(self, x, out_feat_keys=None):
         """Forward an image `x` through the network and return the asked output features.
+
         Args:
           x: input image.
           out_feat_keys: a list/tuple with the feature names of the features
                 that the function should return. By default the last feature of
-                the network is returned.\
+                the network is returned.
+
         Return:
             out_feats: If multiple output features were asked then `out_feats`
                 is a list with the asked output features placed in the same

@@ -28,8 +28,9 @@ _PLACES205_DATASET_DIR = './datasets/Places205'
 #_IMAGENET_DATASET_DIR = '../imagenet/ILSVRC/Data/CLS-LOC'
 #_IMAGENET_DATASET_DIR = '/home/rggadde/efs/rggadde/data/imagenet/ILSVRC/Data/CLS-LOC'
 #_IMAGENET_DATASET_DIR = '/home/medathati/Work/SpectralSelfSupervision/Data/ILSVRC/Data/CLS-LOC'
-_IMAGENET_DATASET_DIR = '/home/medathati/Work/SpectralSelfSupervision/Data/tiny-imagenet-200' # This is tiny Imagenet
-
+#_IMAGENET_DATASET_DIR = '/home/medathati/Work/SpectralSelfSupervision/Data/tiny-imagenet-200' # This is tiny Imagenet
+#_IMAGENET_DATASET_DIR = '/root/Data/tiny-imagenet-200'
+_IMAGENET_DATASET_DIR = '/root/Data/ILSVRC/Data/CLS-LOC'
 
 def buildLabelIndex(labels):
     label2inds = {}
@@ -102,21 +103,21 @@ class GenericDataset(data.Dataset):
 
             if self.split!='train':
                 transforms_list = [
-                    transforms.Scale(64),
-                    transforms.CenterCrop(64), # 224
+                    transforms.Scale(256),
+                    transforms.CenterCrop(224), # 224
                     lambda x: np.asarray(x),
                 ]
             else:
                 if self.random_sized_crop:
                     transforms_list = [
-                        transforms.RandomSizedCrop(64), #224
+                        transforms.RandomSizedCrop(224), #224
                         transforms.RandomHorizontalFlip(),
                         lambda x: np.asarray(x),
                     ]
                 else:
                     transforms_list = [
-                        transforms.Scale(64),#256
-                        transforms.RandomCrop(64),
+                        transforms.Scale(256),#256
+                        transforms.RandomCrop(224),
                         transforms.RandomHorizontalFlip(),
                         lambda x: np.asarray(x),
                     ]
@@ -391,15 +392,34 @@ def hsv_to_rgb(hsv):
     rgb[..., 2] = np.select(conditions, [v, p, t, v, v, q], default=p)
     return rgb.astype('uint8')
 
-
-def shift_hue(arr,hshift):
+import pytorch_colors as colors
+def shift_hue_cpu(arr,hshift):
     #print("Rotating hue by ",hshift*360)
+    #arr = torch.from_numpy(arr.copy())
+    #arr = torch.from_numpy(arr.transpose([2,0,1]).copy()).float()
+    #arr.unsqueeze_(0)
+    #print("The shape before hue rotate:", arr.size())
     hsv=rgb_to_hsv(arr)
     #hsv[...,0]=hshift #To set the hue
     hsv[...,0]= (hsv[...,0] + hshift)%1.0
     rgb=hsv_to_rgb(hsv)
+    #print("The shape after hue rotate:", rgb.size())
     return rgb
-
+@torch.no_grad()
+def shift_hue(arr,hshift):
+    #print("Rotating hue by ",hshift*360)
+    #arr = torch.from_numpy(arr.copy())
+    arr = torch.from_numpy(arr.transpose([2,0,1]).copy()).float()
+    arr.unsqueeze_(0)
+    #print("The shape before hue rotate:", arr.size())
+    hsv=colors.rgb_to_hsv(arr)
+    #print("Shape of HSV:", hsv.size())
+    #hsv[...,0]=hshift #To set the hue
+    #hsv[...,0]= (hsv[...,0] + hshift)%1.0
+    hsv[:,0,...]= (hsv[:,0,...] + hshift)%1.0
+    rgb=colors.hsv_to_rgb(hsv)
+    #print("The shape after hue rotate:", rgb.size())
+    return rgb.numpy()[0].transpose([1,2,0])
 
 def rotate_img(img, rot):
     if rot == 0: # 0 degrees rotation
@@ -468,24 +488,25 @@ class DataLoader(object):
                 #filtered_imgs =[self.transform(img) for img in filtered_imgs]
                 #return torch.stack(filtered_imgs, dim=0), filtered_labels
                 
-                # rotated_imgs = [
-                #     self.transform(img0),
-                #     self.transform(rotate_img(img0,  90).copy()),
-                #     self.transform(rotate_img(img0, 180).copy()),
-                #     self.transform(rotate_img(img0, 270).copy())
-                # ]
-                # rotation_labels = torch.LongTensor([0, 1, 2, 3])
-                # return torch.stack(rotated_imgs, dim=0), rotation_labels
+                #rotated_imgs = [
+                #    self.transform(img0),
+                #    self.transform(rotate_img(img0,  90).copy()),
+                #    self.transform(rotate_img(img0, 180).copy()),
+                #    self.transform(rotate_img(img0, 270).copy())
+                #]
+                #rotation_labels = torch.LongTensor([0, 1, 2, 3])
+                #print("Label size from data laoder:", rotation_labels.size())
+                #return torch.stack(rotated_imgs, dim=0), rotation_labels, rotation_labels
 
                 #Hue Rotated Images
-                # rotated_imgs = [
+                #rotated_imgs = [
                 #     self.transform(img0),
                 #     self.transform(shift_hue(img0,  90/360.0).copy()),
                 #     self.transform(shift_hue(img0, 180/360.0).copy()),
                 #     self.transform(shift_hue(img0, 270/360.0).copy())
-                # ]
-                # rotation_labels = torch.LongTensor([0, 1, 2, 3])
-
+                #]
+                #rotation_labels = torch.LongTensor([0, 1, 2, 3])
+                #return torch.stack(rotated_imgs, dim=0), rotation_labels
                 #Geometric and Photometric Rotated Images
                 rotated_imgs = [
                     self.transform(img0),
@@ -505,7 +526,9 @@ class DataLoader(object):
                     self.transform(rotate_img(shift_hue(img0, 180/360.0), 270).copy()),
                     self.transform(rotate_img(shift_hue(img0, 270/360.0), 270).copy())
                 ]
-                rotation_labels = torch.LongTensor([0, 1, 2, 3,4,5,6,7,8,9,10,11,12,13,14,15])
+                geo_rotation_labels = torch.LongTensor([0, 1, 2, 3,0,0,0,1,1,1,2,2,2,3,3,3])
+                hue_rotation_labels = torch.LongTensor([0, 0, 0, 0,1,2,3,1,2,3,1,2,3,1,2,3])
+                return torch.stack(rotated_imgs, dim=0), geo_rotation_labels, hue_rotation_labels
 
                 # rotated_imgs = [
                 #     self.transform(img0),
@@ -518,15 +541,17 @@ class DataLoader(object):
                 #     self.transform(shift_hue(img0, 315/360.0).copy())
                 # ]
                 # rotation_labels = torch.LongTensor([0, 1, 2, 3,4,5,6,7])
-
-                return torch.stack(rotated_imgs, dim=0), rotation_labels
+                # return torch.stack(rotated_imgs, dim=0), rotation_labels
 
             def _collate_fun(batch):
                 batch = default_collate(batch)
-                assert(len(batch)==2)
+                #print("Total batch size:", len(batch))
+                assert(len(batch)==3)
                 batch_size, rotations, channels, height, width = batch[0].size()
+                #print("batch_Size:", batch_size, "Rotations", rotations, "channlels", channels, height, width)
                 batch[0] = batch[0].view([batch_size*rotations, channels, height, width])
                 batch[1] = batch[1].view([batch_size*rotations])
+                batch[2] = batch[2].view([batch_size*rotations])
                 return batch
         else: # supervised mode
             # if in supervised mode define a loader function that given the

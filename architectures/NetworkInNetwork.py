@@ -70,9 +70,13 @@ class NetworkInNetwork(nn.Module):
         blocks.append(nn.Sequential())
         blocks[-1].add_module('GlobalAveragePooling',  GlobalAveragePooling())
         blocks[-1].add_module('Classifier', nn.Linear(nChannels, num_classes))
+        # Multi Head
+        blocks.append(nn.Sequential())
+        blocks[-1].add_module('GlobalAveragePooling_p',  GlobalAveragePooling())
+        blocks[-1].add_module('Classifier_p',nn.Linear(nChannels,num_classes))
 
         self._feature_blocks = nn.ModuleList(blocks)
-        self.all_feat_names = ['conv'+str(s+1) for s in range(num_stages)] + ['classifier',]
+        self.all_feat_names = ['conv'+str(s+1) for s in range(num_stages)] + ['classifier',] + ['classifier_p',]
         assert(len(self.all_feat_names) == len(self._feature_blocks))
 
     def _parse_out_keys_arg(self, out_feat_keys):
@@ -109,7 +113,8 @@ class NetworkInNetwork(nn.Module):
         out_feat_keys, max_out_feat = self._parse_out_keys_arg(out_feat_keys)
         out_feats = [None] * len(out_feat_keys)
         feat = x
-        for f in range(max_out_feat+1):
+        for f in range(max_out_feat):
+            print(self.all_feat_names[f])
             feat = self._feature_blocks[f](feat)
             key = self.all_feat_names[f]
             if key in out_feat_keys:
