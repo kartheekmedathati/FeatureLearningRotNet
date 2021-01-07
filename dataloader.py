@@ -556,10 +556,11 @@ if __name__ == '__main__':
 
     #dataset = GenericDataset('cifar10','train', random_sized_crop=False)
     dataset = GenericDataset('imagenet','train', random_sized_crop=True)
-    dataloader = DataLoader(dataset, batch_size=8, unsupervised=True)
+    dataloader = DataLoader(dataset, batch_size=4, unsupervised=False)
 
     for b in dataloader(0):
         data, label = b
+        print(label)
         break
     print(data.size())
     inv_transform = dataloader.inv_transform
